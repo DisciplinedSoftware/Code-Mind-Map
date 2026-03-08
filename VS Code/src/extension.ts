@@ -860,6 +860,46 @@ export class CodeMindMapPanel {
         let scheduleTimerHandle = null;
         let hideCompleted = false; // filter: hide completed nodes and their descendants
 
+        // Returns the DOM element to hide/show for a given node (its wrapper, including children).
+        // For any node, its me-parent element is fetched by ID; if its immediate parent is
+        // me-wrapper we hide the wrapper so no connector stub / margin is left behind.
+        function getHideTargetEl(nodeObj) {
+            if (!nodeObj || !nodeObj.id) return null;
+            const meParent = document.getElementById(nodeObj.id);
+            if (!meParent) return null;
+            const parent = meParent.parentElement;
+            if (parent && parent.tagName.toLowerCase() === 'me-wrapper') return parent;
+            return meParent;
+        }
+
+        // Walks the full node tree and adds/removes .mm-node-hidden based on hideCompleted.
+        // Descendants of a completed node are hidden even if they carry no status themselves.
+        function applyFilter() {
+            if (!mind) return;
+            const root = mind.nodeData;
+            if (!root) return;
+
+            function processNode(nodeObj, ancestorCompleted) {
+                const isCompleted = nodeObj.data?.status === 'completed';
+                const shouldHide = hideCompleted && (isCompleted || ancestorCompleted);
+
+                if (nodeObj.id !== 'me-root') {
+                    const el = getHideTargetEl(nodeObj);
+                    if (el) {
+                        el.classList.toggle('mm-node-hidden', shouldHide);
+                    }
+                }
+
+                if (Array.isArray(nodeObj.children)) {
+                    for (const child of nodeObj.children) {
+                        processNode(child, ancestorCompleted || isCompleted);
+                    }
+                }
+            }
+
+            processNode(root, false);
+        }
+
         function initMindMap() {
             const options = {
                 el: '#map',
@@ -1164,64 +1204,6 @@ export class CodeMindMapPanel {
                 // linkDiv is called by MindElixir itself after layout; we must not call it here
                 // as that would create an infinite loop via the linkDiv bus listener
                 applyFilter();
-            }
-
-            // Returns the DOM element to hide/show for a given node (its wrapper, including children).
-            // For level-1 nodes (me-parent inside me-wrapper) we hide me-wrapper so no blank
-            // space remains from the connector stub. For deeper nodes we hide me-parent.
-            function getHideTargetEl(nodeObj) {
-                if (!nodeObj || !nodeObj.id) return null;
-                const nodeElement = MindElixir.E(nodeObj.id);
-                if (!nodeElement) return null;
-                const domEl = nodeElement.getEl?.() || nodeElement;
-                if (!domEl) return null;
-
-                const topicEl = (() => {
-                    if (domEl.tagName === 'ME-TPC') return domEl;
-                    return domEl.querySelector?.('me-tpc') ||
-                           domEl.getElementsByTagName?.('me-tpc')?.[0] ||
-                           domEl;
-                })();
-
-                const meParent = topicEl.closest?.('me-parent');
-                if (!meParent) return topicEl.parentElement;
-                const meParentParent = meParent.parentElement;
-                if (meParentParent && meParentParent.tagName?.toLowerCase() === 'me-wrapper') {
-                    return meParentParent;
-                }
-                return meParent;
-            }
-
-            // Walks all nodes and adds/removes .mm-node-hidden based on hideCompleted state.
-            // Descendants of a completed node are hidden even if they carry no status themselves.
-            function applyFilter() {
-                if (!mind) return;
-                const root = mind.nodeData;
-                if (!root) return;
-
-                function processNode(nodeObj, ancestorCompleted) {
-                    const isCompleted = nodeObj.data?.status === 'completed';
-                    const shouldHide = hideCompleted && (isCompleted || ancestorCompleted);
-
-                    if (nodeObj.id !== 'me-root') {
-                        const wrapperEl = getHideTargetEl(nodeObj);
-                        if (wrapperEl) {
-                            if (shouldHide) {
-                                wrapperEl.classList.add('mm-node-hidden');
-                            } else {
-                                wrapperEl.classList.remove('mm-node-hidden');
-                            }
-                        }
-                    }
-
-                    if (Array.isArray(nodeObj.children)) {
-                        for (const child of nodeObj.children) {
-                            processNode(child, ancestorCompleted || isCompleted);
-                        }
-                    }
-                }
-
-                processNode(root, false);
             }
 
             function scheduleApplyAllStatuses() {
@@ -1543,7 +1525,7 @@ export class CodeMindMapPanel {
                 hideCompletedBtn.addEventListener('click', () => {
                     hideCompleted = !hideCompleted;
                     hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
-                    scheduleApplyAllStatuses();
+                    applyFilter();
                 });
             }
 
