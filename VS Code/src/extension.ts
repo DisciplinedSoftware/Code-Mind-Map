@@ -790,6 +790,16 @@ export class CodeMindMapPanel {
             content: '✓';
             color: #4caf50;
         }
+
+        /* Filter: hide completed nodes and their descendants */
+        .mm-node-hidden {
+            display: none !important;
+        }
+        /* Active state for toggle buttons */
+        .mm-btn-active {
+            background: #555 !important;
+            box-shadow: inset 0 0 0 1px #888;
+        }
     </style>
 </head>
 <body>
@@ -830,6 +840,11 @@ export class CodeMindMapPanel {
                 <span class="mm-icon" aria-label="Color palette">🎨</span>
                 <span class="mm-label">Toggle Color Scheme</span>
             </button>
+            <!-- Hide Completed Tasks -->
+            <button class="mm-btn" id="hideCompletedBtn" title="Hide completed tasks and their descendants">
+                <span class="mm-icon" aria-label="Hide completed">🙈</span>
+                <span class="mm-label">Hide Completed</span>
+            </button>
         </div>
         <div id="map"></div>
     </div>
@@ -843,6 +858,7 @@ export class CodeMindMapPanel {
         let linkDivDebounceTimer = null; // debounce timer for the linkDiv bus event
         let scheduleRafHandle = null;
         let scheduleTimerHandle = null;
+        let hideCompleted = false; // filter: hide completed nodes and their descendants
 
         function initMindMap() {
             const options = {
@@ -1068,6 +1084,10 @@ export class CodeMindMapPanel {
                                         },
                                     ],
                                 },
+                                {
+                                    topic: '🙈 toolbar button — toggle hide/show all completed tasks and their descendants',
+                                    id: 'bd1bb2ac4bbab465',
+                                },
                             ],
                         },
                     ],
@@ -1143,6 +1163,65 @@ export class CodeMindMapPanel {
                 }
                 // linkDiv is called by MindElixir itself after layout; we must not call it here
                 // as that would create an infinite loop via the linkDiv bus listener
+                applyFilter();
+            }
+
+            // Returns the DOM element to hide/show for a given node (its wrapper, including children).
+            // For level-1 nodes (me-parent inside me-wrapper) we hide me-wrapper so no blank
+            // space remains from the connector stub. For deeper nodes we hide me-parent.
+            function getHideTargetEl(nodeObj) {
+                if (!nodeObj || !nodeObj.id) return null;
+                const nodeElement = MindElixir.E(nodeObj.id);
+                if (!nodeElement) return null;
+                const domEl = nodeElement.getEl?.() || nodeElement;
+                if (!domEl) return null;
+
+                const topicEl = (() => {
+                    if (domEl.tagName === 'ME-TPC') return domEl;
+                    return domEl.querySelector?.('me-tpc') ||
+                           domEl.getElementsByTagName?.('me-tpc')?.[0] ||
+                           domEl;
+                })();
+
+                const meParent = topicEl.closest?.('me-parent');
+                if (!meParent) return topicEl.parentElement;
+                const meParentParent = meParent.parentElement;
+                if (meParentParent && meParentParent.tagName?.toLowerCase() === 'me-wrapper') {
+                    return meParentParent;
+                }
+                return meParent;
+            }
+
+            // Walks all nodes and adds/removes .mm-node-hidden based on hideCompleted state.
+            // Descendants of a completed node are hidden even if they carry no status themselves.
+            function applyFilter() {
+                if (!mind) return;
+                const root = mind.nodeData;
+                if (!root) return;
+
+                function processNode(nodeObj, ancestorCompleted) {
+                    const isCompleted = nodeObj.data?.status === 'completed';
+                    const shouldHide = hideCompleted && (isCompleted || ancestorCompleted);
+
+                    if (nodeObj.id !== 'me-root') {
+                        const wrapperEl = getHideTargetEl(nodeObj);
+                        if (wrapperEl) {
+                            if (shouldHide) {
+                                wrapperEl.classList.add('mm-node-hidden');
+                            } else {
+                                wrapperEl.classList.remove('mm-node-hidden');
+                            }
+                        }
+                    }
+
+                    if (Array.isArray(nodeObj.children)) {
+                        for (const child of nodeObj.children) {
+                            processNode(child, ancestorCompleted || isCompleted);
+                        }
+                    }
+                }
+
+                processNode(root, false);
             }
 
             function scheduleApplyAllStatuses() {
@@ -1455,6 +1534,16 @@ export class CodeMindMapPanel {
             if (toggleColorSchemeBtn) {
                 toggleColorSchemeBtn.addEventListener('click', () => {
                     vscode.postMessage({ action: 'toggleColorScheme' });
+                });
+            }
+
+            // Hide Completed button
+            const hideCompletedBtn = document.getElementById('hideCompletedBtn');
+            if (hideCompletedBtn) {
+                hideCompletedBtn.addEventListener('click', () => {
+                    hideCompleted = !hideCompleted;
+                    hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+                    scheduleApplyAllStatuses();
                 });
             }
 
