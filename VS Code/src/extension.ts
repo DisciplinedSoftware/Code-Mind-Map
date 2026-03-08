@@ -860,35 +860,52 @@ export class CodeMindMapPanel {
         let scheduleTimerHandle = null;
         let hideCompleted = false; // filter: hide completed nodes and their descendants
 
-        // Returns the DOM element to hide/show for a given node (its wrapper, including children).
-        // MindElixir renders nodes as me-parent[data-nodeid="me<id>"].
-        // For level-1 nodes whose me-parent is a direct child of me-wrapper we hide me-wrapper
-        // so the branch gap/margin disappears too. For deeper nodes we hide me-parent itself.
+        // Every me-parent[data-nodeid] is the first child of its own me-wrapper.
+        // Hiding me-wrapper hides the node, all its descendants, and its subLines SVG.
         function getHideTargetEl(nodeObj) {
             if (!nodeObj || !nodeObj.id) return null;
             const meParent = document.querySelector('[data-nodeid="me' + nodeObj.id + '"]');
             if (!meParent) return null;
-            const parent = meParent.parentElement;
-            if (parent && parent.tagName.toLowerCase() === 'me-wrapper') return parent;
-            return meParent;
+            return meParent.parentElement; // always me-wrapper
+        }
+
+        // Mirrors MindElixir's Ie() DFS traversal so we can enumerate me-wrapper elements
+        // in the exact same order as the <path> elements in a level-1 wrapper's subLines SVG.
+        //
+        // MindElixir DOM layout (after linkDiv has run):
+        //   me-wrapper                       – one per node at every depth
+        //     me-parent[data-nodeid]         – children[0]: the node box
+        //       me-tpc                       – children[0]: topic text
+        //       me-epd                       – children[1]: expand button (only if has kids)
+        //     me-children                    – children[1]: children container (only if expanded)
+        //       me-wrapper ...               – grandchildren, each following the same pattern
+        //     <svg class="subLines">         – lastChild: all sub-branch paths for the subtree
+        function collectSubLineOrder(wrapper, results) {
+            const second = wrapper.children[1];
+            if (!second || second.tagName.toLowerCase() !== 'me-children') return;
+            for (const cw of second.children) { // cw = child me-wrapper
+                results.push(cw); // Ie draws a path for each child, always
+                const epd = cw.children[0]?.children[1]; // me-parent.children[1] = me-epd
+                if (!epd || !epd.expanded) continue; // Ie skips recursion for collapsed/leaf
+                collectSubLineOrder(cw, results);
+            }
         }
 
         // Walks the full node tree and adds/removes .mm-node-hidden based on hideCompleted.
-        // Descendants of a completed node are hidden even if they carry no status themselves.
+        // Also syncs the SVG branch lines so connectors to hidden nodes are hidden too.
         function applyFilter() {
             if (!mind) return;
             const root = mind.nodeData;
             if (!root) return;
 
+            // 1. Show/hide node wrapper elements
             function processNode(nodeObj, ancestorCompleted) {
                 const isCompleted = nodeObj.data?.status === 'completed';
                 const shouldHide = hideCompleted && (isCompleted || ancestorCompleted);
 
                 if (nodeObj.id !== 'me-root') {
                     const el = getHideTargetEl(nodeObj);
-                    if (el) {
-                        el.classList.toggle('mm-node-hidden', shouldHide);
-                    }
+                    if (el) el.classList.toggle('mm-node-hidden', shouldHide);
                 }
 
                 if (Array.isArray(nodeObj.children)) {
@@ -897,8 +914,33 @@ export class CodeMindMapPanel {
                     }
                 }
             }
-
             processNode(root, false);
+
+            // 2. Sync SVG branch line visibility.
+
+            // Main branches (root → each level-1 wrapper): one <path> per me-wrapper, in order.
+            const linesEl = document.querySelector('.map-container .lines');
+            if (linesEl) {
+                const wrappers = document.querySelectorAll('me-main > me-wrapper');
+                const paths = linesEl.children;
+                for (let i = 0; i < wrappers.length && i < paths.length; i++) {
+                    paths[i].style.display = wrappers[i].classList.contains('mm-node-hidden') ? 'none' : '';
+                }
+            }
+
+            // Sub-branches: each visible level-1 me-wrapper has a subLines SVG as its last
+            // child whose <path> elements are in the same DFS order as collectSubLineOrder().
+            for (const wrapper of document.querySelectorAll('me-main > me-wrapper')) {
+                if (wrapper.classList.contains('mm-node-hidden')) continue; // subLines already hidden
+                const lastEl = wrapper.lastElementChild;
+                if (!lastEl || lastEl.tagName.toLowerCase() !== 'svg') continue; // no subLines yet
+                const nodesInOrder = [];
+                collectSubLineOrder(wrapper, nodesInOrder);
+                const subPaths = lastEl.children;
+                for (let i = 0; i < nodesInOrder.length && i < subPaths.length; i++) {
+                    subPaths[i].style.display = nodesInOrder[i].classList.contains('mm-node-hidden') ? 'none' : '';
+                }
+            }
         }
 
         function initMindMap() {
@@ -1526,7 +1568,8 @@ export class CodeMindMapPanel {
                 hideCompletedBtn.addEventListener('click', () => {
                     hideCompleted = !hideCompleted;
                     hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
-                    applyFilter();
+                    applyFilter(); // hide/show nodes and stale SVG paths immediately
+                    if (mind) mind.linkDiv(); // recompute layout; debounced applyFilter will clean up new paths
                 });
             }
 
