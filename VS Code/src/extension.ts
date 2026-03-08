@@ -793,23 +793,26 @@ export class CodeMindMapPanel {
 
         /* Child task completion progress */
         .map-container me-tpc[data-child-progress-visible="true"] {
-            --child-progress-ratio: 0%;
+            --child-progress-completed-ratio: 0%;
+            --child-progress-in-progress-ratio: 0%;
             --child-progress-label-width: 30px;
             background-image: linear-gradient(
                 to right,
-                #4caf50 var(--child-progress-ratio),
-                rgba(255, 255, 255, 0.18) var(--child-progress-ratio)
+                #4caf50 var(--child-progress-completed-ratio),
+                #ff9800 var(--child-progress-completed-ratio),
+                #ff9800 var(--child-progress-in-progress-ratio),
+                rgba(255, 255, 255, 0.18) var(--child-progress-in-progress-ratio)
             );
             background-repeat: no-repeat;
             background-size: calc(100% - 8px) 4px;
             background-position: 4px calc(100% - 2px);
             padding-bottom: 8px;
-            padding-right: calc(var(--child-progress-label-width) + 16px);
+            padding-inline-end: calc(var(--child-progress-label-width) + 16px);
         }
         .map-container me-tpc[data-child-progress-visible="true"]::after {
             content: attr(data-child-progress-text);
             position: absolute;
-            right: 6px;
+            inset-inline-end: 6px;
             top: 50%;
             transform: translateY(-50%);
             font-size: 10px;
@@ -878,6 +881,7 @@ export class CodeMindMapPanel {
         let linkDivDebounceTimer = null; // debounce timer for the linkDiv bus event
         let scheduleRafHandle = null;
         let scheduleTimerHandle = null;
+        let applyingStatuses = false; // re-entry guard: prevents linkDiv→applyAllStatuses→linkDiv loop
 
         function initMindMap() {
             const options = {
@@ -1176,12 +1180,14 @@ export class CodeMindMapPanel {
                 if (children.length === 0) {
                     topicEl.removeAttribute('data-child-progress-visible');
                     topicEl.removeAttribute('data-child-progress-text');
-                    topicEl.style.removeProperty('--child-progress-ratio');
+                    topicEl.style.removeProperty('--child-progress-completed-ratio');
+                    topicEl.style.removeProperty('--child-progress-in-progress-ratio');
                     topicEl.style.removeProperty('--child-progress-label-width');
                     return;
                 }
 
                 let completedChildren = 0;
+                let inProgressChildren = 0;
                 let statusMarkedChildren = 0;
 
                 for (const child of children) {
@@ -1190,6 +1196,7 @@ export class CodeMindMapPanel {
                         completedChildren += 1;
                         statusMarkedChildren += 1;
                     } else if (childStatus === 'in-progress') {
+                        inProgressChildren += 1;
                         statusMarkedChildren += 1;
                     }
                 }
@@ -1198,7 +1205,8 @@ export class CodeMindMapPanel {
                 if (statusMarkedChildren === 0) {
                     topicEl.removeAttribute('data-child-progress-visible');
                     topicEl.removeAttribute('data-child-progress-text');
-                    topicEl.style.removeProperty('--child-progress-ratio');
+                    topicEl.style.removeProperty('--child-progress-completed-ratio');
+                    topicEl.style.removeProperty('--child-progress-in-progress-ratio');
                     topicEl.style.removeProperty('--child-progress-label-width');
                     return;
                 }
@@ -1206,12 +1214,16 @@ export class CodeMindMapPanel {
                 const completionRatio = children.length > 0
                     ? Math.round((completedChildren / children.length) * 100)
                     : 0;
+                const inProgressRatio = children.length > 0
+                    ? Math.round(((completedChildren + inProgressChildren) / children.length) * 100)
+                    : 0;
                 const progressText = completedChildren + '/' + children.length;
                 const labelWidth = Math.min(84, Math.max(30, progressText.length * 6 + 10));
 
                 topicEl.setAttribute('data-child-progress-visible', 'true');
                 topicEl.setAttribute('data-child-progress-text', progressText);
-                topicEl.style.setProperty('--child-progress-ratio', completionRatio + '%');
+                topicEl.style.setProperty('--child-progress-completed-ratio', completionRatio + '%');
+                topicEl.style.setProperty('--child-progress-in-progress-ratio', inProgressRatio + '%');
                 topicEl.style.setProperty('--child-progress-label-width', labelWidth + 'px');
             }
 
@@ -1230,8 +1242,11 @@ export class CodeMindMapPanel {
                         }
                     }
                 }
-                // linkDiv is called by MindElixir itself after layout; we must not call it here
-                // as that would create an infinite loop via the linkDiv bus listener
+                // Redraw branch lines to realign with resized nodes (padding changed by progress bars).
+                // The re-entry guard above prevents the resulting linkDiv event from re-triggering this.
+                applyingStatuses = true;
+                mind.linkDiv();
+                applyingStatuses = false;
             }
 
             function scheduleApplyAllStatuses() {
@@ -1263,7 +1278,9 @@ export class CodeMindMapPanel {
             // Debounced linkDiv listener: MindElixir fires linkDiv after every layout pass
             // (including multiple passes after refresh/changeTheme). Wait for 50ms of silence
             // before applying statuses so we always run after the final DOM state.
+            // The applyingStatuses guard skips the event fired by our own mind.linkDiv() call.
             mind.bus.addListener('linkDiv', () => {
+                if (applyingStatuses) return;
                 clearTimeout(linkDivDebounceTimer);
                 linkDivDebounceTimer = setTimeout(applyAllStatuses, 50);
             });
