@@ -861,11 +861,12 @@ export class CodeMindMapPanel {
         let hideCompleted = false; // filter: hide completed nodes and their descendants
 
         // Returns the DOM element to hide/show for a given node (its wrapper, including children).
-        // For any node, its me-parent element is fetched by ID; if its immediate parent is
-        // me-wrapper we hide the wrapper so no connector stub / margin is left behind.
+        // MindElixir renders nodes as me-parent[data-nodeid="me<id>"].
+        // For level-1 nodes whose me-parent is a direct child of me-wrapper we hide me-wrapper
+        // so the branch gap/margin disappears too. For deeper nodes we hide me-parent itself.
         function getHideTargetEl(nodeObj) {
             if (!nodeObj || !nodeObj.id) return null;
-            const meParent = document.getElementById(nodeObj.id);
+            const meParent = document.querySelector(`[data-nodeid="me${nodeObj.id}"]`);
             if (!meParent) return null;
             const parent = meParent.parentElement;
             if (parent && parent.tagName.toLowerCase() === 'me-wrapper') return parent;
