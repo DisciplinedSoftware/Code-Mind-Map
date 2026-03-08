@@ -866,7 +866,7 @@ export class CodeMindMapPanel {
         // so the branch gap/margin disappears too. For deeper nodes we hide me-parent itself.
         function getHideTargetEl(nodeObj) {
             if (!nodeObj || !nodeObj.id) return null;
-            const meParent = document.querySelector(`[data-nodeid="me${nodeObj.id}"]`);
+            const meParent = document.querySelector('[data-nodeid="me' + nodeObj.id + '"]');
             if (!meParent) return null;
             const parent = meParent.parentElement;
             if (parent && parent.tagName.toLowerCase() === 'me-wrapper') return parent;
