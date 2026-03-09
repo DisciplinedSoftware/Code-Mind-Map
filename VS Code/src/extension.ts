@@ -1205,6 +1205,10 @@ export class CodeMindMapPanel {
             mind = new MindElixir(options);
             mind.init(data);
 
+            // Apply filter immediately (synchronous, before first paint) so that
+            // when hideCompleted is true the hidden nodes are never seen by the user.
+            applyFilter();
+
             // Apply any import that arrived before mind was ready
             if (pendingImport !== null) {
                 window.importData(pendingImport);
