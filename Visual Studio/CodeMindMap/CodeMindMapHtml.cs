@@ -76,9 +76,40 @@ namespace CodeMindMap
             content: '✓';
             color: #4caf50;
         }
+
+        /* Filter: hide completed nodes and their descendants.
+           NOTE: visibility:hidden (not display:none) is required so that
+           nodes stay in layout flow. display:none shifts sibling nodes,
+           which moves them away from the fixed SVG path coordinates and
+           causes visual misalignment of branches and labels. */
+        .mm-node-hidden {
+            visibility: hidden !important;
+        }
+        /* Active state for toggle button */
+        .mm-btn-active {
+            background: #555 !important;
+            box-shadow: inset 0 0 0 1px #888;
+        }
+        #hideCompletedBtn {
+            position: fixed;
+            top: 8px;
+            right: 10px;
+            z-index: 1000;
+            padding: 5px 10px;
+            cursor: pointer;
+            background: rgba(50,50,50,0.85);
+            color: #ddd;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        #hideCompletedBtn:hover {
+            background: rgba(70,70,70,0.95);
+        }
     </style>
 </head>
 <body>
+    <button id=""hideCompletedBtn"" title=""Hide completed tasks and their descendants"">🙈 Hide Completed</button>
     <div id=""map""></div>
 
     <script type=""module"">
@@ -88,6 +119,86 @@ namespace CodeMindMap
         let linkDivDebounceTimer = null;
         let scheduleRafHandle = null;
         let scheduleTimerHandle = null;
+        let hideCompleted = false;
+
+        // Every me-parent[data-nodeid] is the first child of its own me-wrapper.
+        // Hiding me-wrapper hides the node, all its descendants, and its subLines SVG.
+        // data-nodeid is set on me-tpc (not me-parent), so we must go up two levels:
+        //   me-tpc → me-parent → me-wrapper
+        function getHideTargetEl(nodeObj) {
+            if (!nodeObj || !nodeObj.id) return null;
+            const meTpc = document.querySelector('[data-nodeid="me' + nodeObj.id + '"]');
+            if (!meTpc) return null;
+            return meTpc.parentElement?.parentElement ?? null; // me-tpc → me-parent → me-wrapper
+        }
+
+        // Mirrors MindElixir's Ie() DFS traversal so we can enumerate me-wrapper elements
+        // in the exact same order as the <path> elements in a level-1 wrapper's subLines SVG.
+        function collectSubLineOrder(wrapper, results) {
+            const second = wrapper.children[1];
+            if (!second || second.tagName.toLowerCase() !== 'me-children') return;
+            for (const cw of second.children) { // cw = child me-wrapper
+                results.push(cw); // Ie draws a path for each child, always
+                const epd = cw.children[0]?.children[1]; // me-parent.children[1] = me-epd
+                if (!epd || !epd.expanded) continue; // Ie skips recursion for collapsed/leaf
+                collectSubLineOrder(cw, results);
+            }
+        }
+
+        // Walks the full node tree and adds/removes .mm-node-hidden based on hideCompleted.
+        // Also syncs the SVG branch lines so connectors to hidden nodes are hidden too.
+        function applyFilter() {
+            if (!mind) return;
+            const root = mind.nodeData;
+            if (!root) return;
+
+            // 1. Show/hide node wrapper elements
+            function processNode(nodeObj, ancestorCompleted) {
+                const isCompleted = nodeObj.data?.status === 'completed';
+                const shouldHide = hideCompleted && (isCompleted || ancestorCompleted);
+
+                if (nodeObj.id !== 'me-root') {
+                    const el = getHideTargetEl(nodeObj);
+                    if (el) el.classList.toggle('mm-node-hidden', shouldHide);
+                }
+
+                if (Array.isArray(nodeObj.children)) {
+                    for (const child of nodeObj.children) {
+                        processNode(child, ancestorCompleted || isCompleted);
+                    }
+                }
+            }
+            processNode(root, false);
+
+            // 2. Sync SVG branch line visibility.
+            function setPathDisplay(pathEl, hide) {
+                pathEl.setAttribute('display', hide ? 'none' : '');
+                pathEl.style.display = hide ? 'none' : '';
+            }
+
+            // Main branches (root → each level-1 wrapper): one <path> per me-wrapper, in order.
+            if (mind.lines) {
+                const l1Wrappers = mind.map.querySelectorAll('me-main > me-wrapper');
+                const mainPaths = mind.lines.querySelectorAll('path');
+                for (let i = 0; i < l1Wrappers.length && i < mainPaths.length; i++) {
+                    setPathDisplay(mainPaths[i], l1Wrappers[i].classList.contains('mm-node-hidden'));
+                }
+            }
+
+            // Sub-branches: each visible level-1 me-wrapper has a subLines SVG as its last
+            // child whose <path> elements are in the same DFS order as collectSubLineOrder().
+            for (const wrapper of mind.map.querySelectorAll('me-main > me-wrapper')) {
+                if (wrapper.classList.contains('mm-node-hidden')) continue; // subLines already hidden
+                const lastEl = wrapper.lastElementChild;
+                if (!lastEl || lastEl.tagName.toLowerCase() !== 'svg') continue; // no subLines yet
+                const nodesInOrder = [];
+                collectSubLineOrder(wrapper, nodesInOrder);
+                const subPaths = lastEl.querySelectorAll('path');
+                for (let i = 0; i < nodesInOrder.length && i < subPaths.length; i++) {
+                    setPathDisplay(subPaths[i], nodesInOrder[i].classList.contains('mm-node-hidden'));
+                }
+            }
+        }
 
         function initMindMap() {
             const options = {
@@ -104,6 +215,7 @@ namespace CodeMindMap
                                 node.data = node.data || {};
                                 node.data.status = 'in-progress';
                                 updateNodeStatus(node);
+                                applyFilter();
                                 window.chrome.webview.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -116,6 +228,7 @@ namespace CodeMindMap
                                 node.data = node.data || {};
                                 node.data.status = 'completed';
                                 updateNodeStatus(node);
+                                applyFilter();
                                 window.chrome.webview.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -128,6 +241,7 @@ namespace CodeMindMap
                                 node.data = node.data || {};
                                 delete node.data.status;
                                 updateNodeStatus(node);
+                                applyFilter();
                                 window.chrome.webview.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -298,6 +412,10 @@ namespace CodeMindMap
                                         },
                                     ],
                                 },
+                                {
+                                    topic: '🙈 toolbar button — toggle hide/show all completed tasks and their descendants',
+                                    id: 'bd1bb2ac4bbab465',
+                                },
                             ],
                         },
                     ],
@@ -364,6 +482,7 @@ namespace CodeMindMap
                         }
                     }
                 }
+                applyFilter();
             }
 
             function scheduleApplyAllStatuses() {
@@ -461,10 +580,37 @@ namespace CodeMindMap
                     }
 
                     updateNodeStatus(currentNode);
+                    applyFilter();
                     window.chrome.webview.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                 }
             });
 
+            // Hide Completed button
+            const hideCompletedBtn = document.getElementById('hideCompletedBtn');
+            if (hideCompletedBtn) {
+                hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+                hideCompletedBtn.addEventListener('click', () => {
+                    hideCompleted = !hideCompleted;
+                    hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+                    applyFilter();
+                });
+            }
+
+            document.addEventListener('wheel', function(e) {
+                if (e.altKey) {
+                    e.preventDefault();
+                    const delta = e.deltaY;
+                    if (delta > 0) {
+                            // Handle scroll down
+                            if (mind.scaleVal < 0.6) return
+                            mind.scale((mind.scaleVal -= 0.2))
+                        } else if (delta < 0) {
+                            // Handle scroll up
+                            if (mind.scaleVal > 1.6) return
+                            mind.scale((mind.scaleVal += 0.2))
+                        }
+                }
+            }, { passive: false });        
         }
 
         window.addChildNode = function(topic = 'New Child Node', codeInfoObject) {
@@ -572,6 +718,7 @@ namespace CodeMindMap
                 }
                 // Statuses are applied via the debounced linkDiv bus listener
                 // which fires after MindElixir's layout settles.
+                applyFilter();
                 
                 return { success: true, error: """" };
             } catch (e) {
