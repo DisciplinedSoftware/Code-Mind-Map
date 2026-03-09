@@ -791,9 +791,13 @@ export class CodeMindMapPanel {
             color: #4caf50;
         }
 
-        /* Filter: hide completed nodes and their descendants */
+        /* Filter: hide completed nodes and their descendants.
+           NOTE: visibility:hidden (not display:none) is required so that
+           nodes stay in layout flow. display:none shifts sibling nodes,
+           which moves them away from the fixed SVG path coordinates and
+           causes visual misalignment of branches and labels. */
         .mm-node-hidden {
-            display: none !important;
+            visibility: hidden !important;
         }
         /* Active state for toggle buttons */
         .mm-btn-active {
