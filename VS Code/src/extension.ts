@@ -708,7 +708,9 @@ export class CodeMindMapPanel {
         #container { 
             height: 100vh; 
             display: flex; 
-            flex-direction: column; 
+            flex-direction: column;
+            opacity: 0;
+            transition: opacity 0.15s ease-in;
         }
         #map {
             width: 100%;
@@ -1205,9 +1207,10 @@ export class CodeMindMapPanel {
             mind = new MindElixir(options);
             mind.init(data);
 
-            // Apply filter immediately (synchronous, before first paint) so that
-            // when hideCompleted is true the hidden nodes are never seen by the user.
+            // Apply filter synchronously (before first paint) then reveal the
+            // container so completed nodes are never visible to the user.
             applyFilter();
+            document.getElementById('container').style.opacity = '1';
 
             // Apply any import that arrived before mind was ready
             if (pendingImport !== null) {
@@ -1387,6 +1390,7 @@ export class CodeMindMapPanel {
 
                     // Update visual appearance
                     updateNodeStatus(currentNode);
+                    applyFilter();
 
                     // Trigger autosave
                     vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
@@ -1496,9 +1500,10 @@ export class CodeMindMapPanel {
                 if (dataThemeName != '' && themeManager.contains(dataThemeName) && dataThemeName != mind.theme?.name) {
                     mind.changeTheme(themeManager.getTheme(dataThemeName));
                 }
-                // Apply filter synchronously so completed nodes are hidden before the first
-                // paint after the data loads (the debounced linkDiv listener is too slow).
+                // Apply filter synchronously then reveal; completed nodes are
+                // hidden before the browser paints the imported data.
                 applyFilter();
+                document.getElementById('container').style.opacity = '1';
 
                 return { success: true, error: '' };
 
