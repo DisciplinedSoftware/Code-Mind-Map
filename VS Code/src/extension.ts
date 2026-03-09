@@ -1496,8 +1496,9 @@ export class CodeMindMapPanel {
                 if (dataThemeName != '' && themeManager.contains(dataThemeName) && dataThemeName != mind.theme?.name) {
                     mind.changeTheme(themeManager.getTheme(dataThemeName));
                 }
-                // Statuses are applied via the debounced linkDiv bus listener
-                // which fires after MindElixir's layout settles.
+                // Apply filter synchronously so completed nodes are hidden before the first
+                // paint after the data loads (the debounced linkDiv listener is too slow).
+                applyFilter();
 
                 return { success: true, error: '' };
 
