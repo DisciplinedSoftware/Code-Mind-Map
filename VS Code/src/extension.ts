@@ -862,11 +862,13 @@ export class CodeMindMapPanel {
 
         // Every me-parent[data-nodeid] is the first child of its own me-wrapper.
         // Hiding me-wrapper hides the node, all its descendants, and its subLines SVG.
+        // data-nodeid is set on me-tpc (not me-parent), so we must go up two levels:
+        //   me-tpc → me-parent → me-wrapper
         function getHideTargetEl(nodeObj) {
             if (!nodeObj || !nodeObj.id) return null;
-            const meParent = document.querySelector('[data-nodeid="me' + nodeObj.id + '"]');
-            if (!meParent) return null;
-            return meParent.parentElement; // always me-wrapper
+            const meTpc = document.querySelector('[data-nodeid="me' + nodeObj.id + '"]');
+            if (!meTpc) return null;
+            return meTpc.parentElement?.parentElement ?? null; // me-tpc → me-parent → me-wrapper
         }
 
         // Mirrors MindElixir's Ie() DFS traversal so we can enumerate me-wrapper elements
@@ -1568,8 +1570,8 @@ export class CodeMindMapPanel {
                 hideCompletedBtn.addEventListener('click', () => {
                     hideCompleted = !hideCompleted;
                     hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
-                    applyFilter(); // hide/show nodes and stale SVG paths immediately
-                    if (mind) mind.linkDiv(); // recompute layout; debounced applyFilter will clean up new paths
+                    if (mind) mind.linkDiv(); // recompute layout with hidden nodes
+                    applyFilter(); // hide nodes and SVG paths after linkDiv has redrawn them
                 });
             }
 
