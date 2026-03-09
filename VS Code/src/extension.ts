@@ -94,6 +94,7 @@ export class CodeMindMapPanel {
     public static CurrentPanel: CodeMindMapPanel | undefined;
     public static _context: vscode.ExtensionContext | undefined;
     public static readonly PANEL_OPEN_KEY = 'panelWasOpen';
+    public static readonly HIDE_COMPLETED_KEY = 'hideCompleted';
     private readonly _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
     private _disposables: vscode.Disposable[] = [];
@@ -405,6 +406,10 @@ export class CodeMindMapPanel {
                         this.exportIfPathKnown();
                         break;
 
+                    case 'setHideCompleted':
+                        CodeMindMapPanel._context?.workspaceState.update(CodeMindMapPanel.HIDE_COMPLETED_KEY, message.value);
+                        break;
+
                     case 'toggleColorScheme':
                         this._panel.webview.postMessage({
                             action: 'toggleColorScheme'
@@ -683,6 +688,7 @@ export class CodeMindMapPanel {
         const mindElixirUri = webview.asWebviewUri(mindElixirFileUri);
         const mindElixirStyleFileUri = vscode.Uri.joinPath(extensionUri, 'out', 'MindElixir', 'MindElixir.css');
         const mindElixirStyleUri = webview.asWebviewUri(mindElixirStyleFileUri);
+        const initialHideCompleted = CodeMindMapPanel._context?.workspaceState.get<boolean>(CodeMindMapPanel.HIDE_COMPLETED_KEY) ?? false;
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -862,7 +868,8 @@ export class CodeMindMapPanel {
         let linkDivDebounceTimer = null; // debounce timer for the linkDiv bus event
         let scheduleRafHandle = null;
         let scheduleTimerHandle = null;
-        let hideCompleted = false; // filter: hide completed nodes and their descendants (persisted via vscode state)
+        // Injected by extension host from workspaceState so the value survives panel close/reopen.
+        let hideCompleted = ${initialHideCompleted};
 
         // Every me-parent[data-nodeid] is the first child of its own me-wrapper.
         // Hiding me-wrapper hides the node, all its descendants, and its subLines SVG.
@@ -970,6 +977,7 @@ export class CodeMindMapPanel {
                                 node.data = node.data || {};
                                 node.data.status = 'in-progress';
                                 updateNodeStatus(node);
+                                applyFilter();
                                 vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -982,6 +990,7 @@ export class CodeMindMapPanel {
                                 node.data = node.data || {};
                                 node.data.status = 'completed';
                                 updateNodeStatus(node);
+                                applyFilter();
                                 vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -994,6 +1003,7 @@ export class CodeMindMapPanel {
                                 node.data = node.data || {};
                                 delete node.data.status;
                                 updateNodeStatus(node);
+                                applyFilter();
                                 vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -1577,15 +1587,14 @@ export class CodeMindMapPanel {
             // Hide Completed button
             const hideCompletedBtn = document.getElementById('hideCompletedBtn');
             if (hideCompletedBtn) {
-                // Restore persisted filter state before initializing the mind map so
-                // applyAllStatuses() → applyFilter() picks up the correct value.
-                hideCompleted = !!(vscode.getState()?.hideCompleted);
+                // Initial value is injected from workspaceState; sync the button appearance.
                 hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
 
                 hideCompletedBtn.addEventListener('click', () => {
                     hideCompleted = !hideCompleted;
                     hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
-                    vscode.setState({ ...(vscode.getState() || {}), hideCompleted });
+                    // Persist to extension host workspaceState so it survives panel close/reopen.
+                    vscode.postMessage({ action: 'setHideCompleted', value: hideCompleted });
                     applyFilter();
                 });
             }
