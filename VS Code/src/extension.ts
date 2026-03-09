@@ -999,6 +999,9 @@ export class CodeMindMapPanel {
                     action: 'mindMapOperation',
                     operationName: operation.name,
                 });
+                if (operation.name === 'addChild' || operation.name === 'insertSibling') {
+                    requestAnimationFrame(() => mind.beginEdit());
+                }
             });
 
             document.addEventListener('click', (e) => {
@@ -1062,6 +1065,7 @@ export class CodeMindMapPanel {
                 if (!targetNode) return { success: false, error: 'Target node not found' };
                 mind.addChild(targetNode, childData);
                 mind.selectNode(MindElixir.E(childData.id));
+                requestAnimationFrame(() => mind.beginEdit());
                 return { 
                     success: true, 
                     nodeId: childData.id,
