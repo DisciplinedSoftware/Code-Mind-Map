@@ -1570,8 +1570,7 @@ export class CodeMindMapPanel {
                 hideCompletedBtn.addEventListener('click', () => {
                     hideCompleted = !hideCompleted;
                     hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
-                    if (mind) mind.linkDiv(); // recompute layout with hidden nodes
-                    applyFilter(); // hide nodes and SVG paths after linkDiv has redrawn them
+                    applyFilter();
                 });
             }
 
