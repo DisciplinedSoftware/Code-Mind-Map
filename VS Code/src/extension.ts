@@ -862,7 +862,7 @@ export class CodeMindMapPanel {
         let linkDivDebounceTimer = null; // debounce timer for the linkDiv bus event
         let scheduleRafHandle = null;
         let scheduleTimerHandle = null;
-        let hideCompleted = false; // filter: hide completed nodes and their descendants
+        let hideCompleted = false; // filter: hide completed nodes and their descendants (persisted via vscode state)
 
         // Every me-parent[data-nodeid] is the first child of its own me-wrapper.
         // Hiding me-wrapper hides the node, all its descendants, and its subLines SVG.
@@ -1577,9 +1577,15 @@ export class CodeMindMapPanel {
             // Hide Completed button
             const hideCompletedBtn = document.getElementById('hideCompletedBtn');
             if (hideCompletedBtn) {
+                // Restore persisted filter state before initializing the mind map so
+                // applyAllStatuses() → applyFilter() picks up the correct value.
+                hideCompleted = !!(vscode.getState()?.hideCompleted);
+                hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+
                 hideCompletedBtn.addEventListener('click', () => {
                     hideCompleted = !hideCompleted;
                     hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+                    vscode.setState({ ...(vscode.getState() || {}), hideCompleted });
                     applyFilter();
                 });
             }
