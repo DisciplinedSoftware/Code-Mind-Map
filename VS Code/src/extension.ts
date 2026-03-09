@@ -919,28 +919,34 @@ export class CodeMindMapPanel {
             processNode(root, false);
 
             // 2. Sync SVG branch line visibility.
+            // Use mind.lines and mind.map (same references linkDiv uses) to avoid
+            // any selector-based mismatch. Use setAttribute('display') + style.display
+            // for maximum SVG compatibility.
+            function setPathDisplay(pathEl, hide) {
+                pathEl.setAttribute('display', hide ? 'none' : '');
+                pathEl.style.display = hide ? 'none' : '';
+            }
 
             // Main branches (root → each level-1 wrapper): one <path> per me-wrapper, in order.
-            const linesEl = document.querySelector('.map-container .lines');
-            if (linesEl) {
-                const wrappers = document.querySelectorAll('me-main > me-wrapper');
-                const paths = linesEl.children;
-                for (let i = 0; i < wrappers.length && i < paths.length; i++) {
-                    paths[i].style.display = wrappers[i].classList.contains('mm-node-hidden') ? 'none' : '';
+            if (mind.lines) {
+                const l1Wrappers = mind.map.querySelectorAll('me-main > me-wrapper');
+                const mainPaths = mind.lines.querySelectorAll('path');
+                for (let i = 0; i < l1Wrappers.length && i < mainPaths.length; i++) {
+                    setPathDisplay(mainPaths[i], l1Wrappers[i].classList.contains('mm-node-hidden'));
                 }
             }
 
             // Sub-branches: each visible level-1 me-wrapper has a subLines SVG as its last
             // child whose <path> elements are in the same DFS order as collectSubLineOrder().
-            for (const wrapper of document.querySelectorAll('me-main > me-wrapper')) {
+            for (const wrapper of mind.map.querySelectorAll('me-main > me-wrapper')) {
                 if (wrapper.classList.contains('mm-node-hidden')) continue; // subLines already hidden
                 const lastEl = wrapper.lastElementChild;
                 if (!lastEl || lastEl.tagName.toLowerCase() !== 'svg') continue; // no subLines yet
                 const nodesInOrder = [];
                 collectSubLineOrder(wrapper, nodesInOrder);
-                const subPaths = lastEl.children;
+                const subPaths = lastEl.querySelectorAll('path');
                 for (let i = 0; i < nodesInOrder.length && i < subPaths.length; i++) {
-                    subPaths[i].style.display = nodesInOrder[i].classList.contains('mm-node-hidden') ? 'none' : '';
+                    setPathDisplay(subPaths[i], nodesInOrder[i].classList.contains('mm-node-hidden'));
                 }
             }
         }
