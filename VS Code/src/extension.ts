@@ -94,6 +94,7 @@ export class CodeMindMapPanel {
     public static CurrentPanel: CodeMindMapPanel | undefined;
     public static _context: vscode.ExtensionContext | undefined;
     public static readonly PANEL_OPEN_KEY = 'panelWasOpen';
+    public static readonly HIDE_COMPLETED_KEY = 'hideCompleted';
     private readonly _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
     private _disposables: vscode.Disposable[] = [];
@@ -405,6 +406,10 @@ export class CodeMindMapPanel {
                         this.exportIfPathKnown();
                         break;
 
+                    case 'setHideCompleted':
+                        CodeMindMapPanel._context?.workspaceState.update(CodeMindMapPanel.HIDE_COMPLETED_KEY, message.value);
+                        break;
+
                     case 'toggleColorScheme':
                         this._panel.webview.postMessage({
                             action: 'toggleColorScheme'
@@ -683,6 +688,7 @@ export class CodeMindMapPanel {
         const mindElixirUri = webview.asWebviewUri(mindElixirFileUri);
         const mindElixirStyleFileUri = vscode.Uri.joinPath(extensionUri, 'out', 'MindElixir', 'MindElixir.css');
         const mindElixirStyleUri = webview.asWebviewUri(mindElixirStyleFileUri);
+        const initialHideCompleted = CodeMindMapPanel._context?.workspaceState.get<boolean>(CodeMindMapPanel.HIDE_COMPLETED_KEY) ?? false;
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -702,7 +708,9 @@ export class CodeMindMapPanel {
         #container { 
             height: 100vh; 
             display: flex; 
-            flex-direction: column; 
+            flex-direction: column;
+            opacity: 0;
+            transition: opacity 0.15s ease-in;
         }
         #map {
             width: 100%;
@@ -790,6 +798,20 @@ export class CodeMindMapPanel {
             content: '✓';
             color: #4caf50;
         }
+
+        /* Filter: hide completed nodes and their descendants.
+           NOTE: visibility:hidden (not display:none) is required so that
+           nodes stay in layout flow. display:none shifts sibling nodes,
+           which moves them away from the fixed SVG path coordinates and
+           causes visual misalignment of branches and labels. */
+        .mm-node-hidden {
+            visibility: hidden !important;
+        }
+        /* Active state for toggle buttons */
+        .mm-btn-active {
+            background: #555 !important;
+            box-shadow: inset 0 0 0 1px #888;
+        }
     </style>
 </head>
 <body>
@@ -830,6 +852,11 @@ export class CodeMindMapPanel {
                 <span class="mm-icon" aria-label="Color palette">🎨</span>
                 <span class="mm-label">Toggle Color Scheme</span>
             </button>
+            <!-- Hide Completed Tasks -->
+            <button class="mm-btn" id="hideCompletedBtn" title="Hide completed tasks and their descendants">
+                <span class="mm-icon" aria-label="Hide completed">🙈</span>
+                <span class="mm-label">Hide Completed</span>
+            </button>
         </div>
         <div id="map"></div>
     </div>
@@ -843,6 +870,99 @@ export class CodeMindMapPanel {
         let linkDivDebounceTimer = null; // debounce timer for the linkDiv bus event
         let scheduleRafHandle = null;
         let scheduleTimerHandle = null;
+        // Injected by extension host from workspaceState so the value survives panel close/reopen.
+        let hideCompleted = ${initialHideCompleted};
+
+        // Every me-parent[data-nodeid] is the first child of its own me-wrapper.
+        // Hiding me-wrapper hides the node, all its descendants, and its subLines SVG.
+        // data-nodeid is set on me-tpc (not me-parent), so we must go up two levels:
+        //   me-tpc → me-parent → me-wrapper
+        function getHideTargetEl(nodeObj) {
+            if (!nodeObj || !nodeObj.id) return null;
+            const meTpc = document.querySelector('[data-nodeid="me' + nodeObj.id + '"]');
+            if (!meTpc) return null;
+            return meTpc.parentElement?.parentElement ?? null; // me-tpc → me-parent → me-wrapper
+        }
+
+        // Mirrors MindElixir's Ie() DFS traversal so we can enumerate me-wrapper elements
+        // in the exact same order as the <path> elements in a level-1 wrapper's subLines SVG.
+        //
+        // MindElixir DOM layout (after linkDiv has run):
+        //   me-wrapper                       – one per node at every depth
+        //     me-parent[data-nodeid]         – children[0]: the node box
+        //       me-tpc                       – children[0]: topic text
+        //       me-epd                       – children[1]: expand button (only if has kids)
+        //     me-children                    – children[1]: children container (only if expanded)
+        //       me-wrapper ...               – grandchildren, each following the same pattern
+        //     <svg class="subLines">         – lastChild: all sub-branch paths for the subtree
+        function collectSubLineOrder(wrapper, results) {
+            const second = wrapper.children[1];
+            if (!second || second.tagName.toLowerCase() !== 'me-children') return;
+            for (const cw of second.children) { // cw = child me-wrapper
+                results.push(cw); // Ie draws a path for each child, always
+                const epd = cw.children[0]?.children[1]; // me-parent.children[1] = me-epd
+                if (!epd || !epd.expanded) continue; // Ie skips recursion for collapsed/leaf
+                collectSubLineOrder(cw, results);
+            }
+        }
+
+        // Walks the full node tree and adds/removes .mm-node-hidden based on hideCompleted.
+        // Also syncs the SVG branch lines so connectors to hidden nodes are hidden too.
+        function applyFilter() {
+            if (!mind) return;
+            const root = mind.nodeData;
+            if (!root) return;
+
+            // 1. Show/hide node wrapper elements
+            function processNode(nodeObj, ancestorCompleted) {
+                const isCompleted = nodeObj.data?.status === 'completed';
+                const shouldHide = hideCompleted && (isCompleted || ancestorCompleted);
+
+                if (nodeObj.id !== 'me-root') {
+                    const el = getHideTargetEl(nodeObj);
+                    if (el) el.classList.toggle('mm-node-hidden', shouldHide);
+                }
+
+                if (Array.isArray(nodeObj.children)) {
+                    for (const child of nodeObj.children) {
+                        processNode(child, ancestorCompleted || isCompleted);
+                    }
+                }
+            }
+            processNode(root, false);
+
+            // 2. Sync SVG branch line visibility.
+            // Use mind.lines and mind.map (same references linkDiv uses) to avoid
+            // any selector-based mismatch. Use setAttribute('display') + style.display
+            // for maximum SVG compatibility.
+            function setPathDisplay(pathEl, hide) {
+                pathEl.setAttribute('display', hide ? 'none' : '');
+                pathEl.style.display = hide ? 'none' : '';
+            }
+
+            // Main branches (root → each level-1 wrapper): one <path> per me-wrapper, in order.
+            if (mind.lines) {
+                const l1Wrappers = mind.map.querySelectorAll('me-main > me-wrapper');
+                const mainPaths = mind.lines.querySelectorAll('path');
+                for (let i = 0; i < l1Wrappers.length && i < mainPaths.length; i++) {
+                    setPathDisplay(mainPaths[i], l1Wrappers[i].classList.contains('mm-node-hidden'));
+                }
+            }
+
+            // Sub-branches: each visible level-1 me-wrapper has a subLines SVG as its last
+            // child whose <path> elements are in the same DFS order as collectSubLineOrder().
+            for (const wrapper of mind.map.querySelectorAll('me-main > me-wrapper')) {
+                if (wrapper.classList.contains('mm-node-hidden')) continue; // subLines already hidden
+                const lastEl = wrapper.lastElementChild;
+                if (!lastEl || lastEl.tagName.toLowerCase() !== 'svg') continue; // no subLines yet
+                const nodesInOrder = [];
+                collectSubLineOrder(wrapper, nodesInOrder);
+                const subPaths = lastEl.querySelectorAll('path');
+                for (let i = 0; i < nodesInOrder.length && i < subPaths.length; i++) {
+                    setPathDisplay(subPaths[i], nodesInOrder[i].classList.contains('mm-node-hidden'));
+                }
+            }
+        }
 
         function initMindMap() {
             const options = {
@@ -859,6 +979,7 @@ export class CodeMindMapPanel {
                                 node.data = node.data || {};
                                 node.data.status = 'in-progress';
                                 updateNodeStatus(node);
+                                applyFilter();
                                 vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -871,6 +992,7 @@ export class CodeMindMapPanel {
                                 node.data = node.data || {};
                                 node.data.status = 'completed';
                                 updateNodeStatus(node);
+                                applyFilter();
                                 vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -883,6 +1005,7 @@ export class CodeMindMapPanel {
                                 node.data = node.data || {};
                                 delete node.data.status;
                                 updateNodeStatus(node);
+                                applyFilter();
                                 vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
                                 const cm = document.querySelector('.map-container > .context-menu'); if (cm) cm.hidden = true;
                             }
@@ -1068,6 +1191,10 @@ export class CodeMindMapPanel {
                                         },
                                     ],
                                 },
+                                {
+                                    topic: '🙈 toolbar button — toggle hide/show all completed tasks and their descendants',
+                                    id: 'bd1bb2ac4bbab465',
+                                },
                             ],
                         },
                     ],
@@ -1079,6 +1206,11 @@ export class CodeMindMapPanel {
 
             mind = new MindElixir(options);
             mind.init(data);
+
+            // Apply filter synchronously (before first paint) then reveal the
+            // container so completed nodes are never visible to the user.
+            applyFilter();
+            document.getElementById('container').style.opacity = '1';
 
             // Apply any import that arrived before mind was ready
             if (pendingImport !== null) {
@@ -1143,6 +1275,7 @@ export class CodeMindMapPanel {
                 }
                 // linkDiv is called by MindElixir itself after layout; we must not call it here
                 // as that would create an infinite loop via the linkDiv bus listener
+                applyFilter();
             }
 
             function scheduleApplyAllStatuses() {
@@ -1257,6 +1390,7 @@ export class CodeMindMapPanel {
 
                     // Update visual appearance
                     updateNodeStatus(currentNode);
+                    applyFilter();
 
                     // Trigger autosave
                     vscode.postMessage({ action: 'mindMapOperation', operationName: 'updateNodeStatus' });
@@ -1366,8 +1500,10 @@ export class CodeMindMapPanel {
                 if (dataThemeName != '' && themeManager.contains(dataThemeName) && dataThemeName != mind.theme?.name) {
                     mind.changeTheme(themeManager.getTheme(dataThemeName));
                 }
-                // Statuses are applied via the debounced linkDiv bus listener
-                // which fires after MindElixir's layout settles.
+                // Apply filter synchronously then reveal; completed nodes are
+                // hidden before the browser paints the imported data.
+                applyFilter();
+                document.getElementById('container').style.opacity = '1';
 
                 return { success: true, error: '' };
 
@@ -1455,6 +1591,21 @@ export class CodeMindMapPanel {
             if (toggleColorSchemeBtn) {
                 toggleColorSchemeBtn.addEventListener('click', () => {
                     vscode.postMessage({ action: 'toggleColorScheme' });
+                });
+            }
+
+            // Hide Completed button
+            const hideCompletedBtn = document.getElementById('hideCompletedBtn');
+            if (hideCompletedBtn) {
+                // Initial value is injected from workspaceState; sync the button appearance.
+                hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+
+                hideCompletedBtn.addEventListener('click', () => {
+                    hideCompleted = !hideCompleted;
+                    hideCompletedBtn.classList.toggle('mm-btn-active', hideCompleted);
+                    // Persist to extension host workspaceState so it survives panel close/reopen.
+                    vscode.postMessage({ action: 'setHideCompleted', value: hideCompleted });
+                    applyFilter();
                 });
             }
 
